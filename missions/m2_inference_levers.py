@@ -32,6 +32,19 @@ def run(verbose: bool = True) -> dict:
     opt_pm = pricing.dollars_per_million(opt_cost, total_tokens)
     savings_pct = (1 - opt_cost / base_cost) * 100 if base_cost else 0.0
 
+    # --- Extension 3: Cache profitability check ---
+    cached_rows = [r for r in rows if int(num(r["cached_input_tokens"])) > 0]
+    cache_ratio = len(cached_rows) / len(rows) if rows else 0
+    # Estimate avg reads per cached prefix from the data
+    avg_cache_reads_estimate = max(1.0, cache_ratio * len(rows) / max(len(cached_rows), 1))
+    # write_cost_per_m for large model input price
+    lin, _ = MODEL_PRICES["large"]
+    cache_worth = pricing.cache_is_worth_it(
+        avg_cache_reads=avg_cache_reads_estimate,
+        write_cost_per_m=lin,
+    )
+    break_even = pricing.cache_break_even_reads()
+
     if verbose:
         print("== M2 Inference Cost Levers ==")
         print(f"requests={len(rows)}  tokens={total_tokens:,}")
@@ -39,11 +52,22 @@ def run(verbose: bool = True) -> dict:
         print(f"optimized : ${opt_cost:,.2f}/day   ${opt_pm:.3f}/1M-token")
         print(f"savings   : {savings_pct:.1f}%  (cascade + caching + batch)")
         print(f"discount stack (batch + 100% cache): {pricing.discount_stack(batch=True, cache_hit_frac=1.0):.3f} of naive")
+        print(f"\n-- Extension 3: Cache Profitability Analysis --")
+        print(f"Requests with cached input: {len(cached_rows)}/{len(rows)} ({cache_ratio:.0%})")
+        print(f"Break-even reads per prefix: {break_even:.2f}")
+        print(f"Estimated avg reads per cached prefix: {avg_cache_reads_estimate:.2f}")
+        print(f"Cache is worth it? {cache_worth}  "
+              f"({'profitable' if cache_worth else 'not profitable at this read rate'})")
+        if not cache_worth:
+            print(f"  -> Need {break_even:.2f}+ reads per prefix to break even.")
+        else:
+            print(f"  -> Savings from caching validated and included in optimized cost.")
 
     return {
         "baseline_daily": round(base_cost, 2), "optimized_daily": round(opt_cost, 2),
         "baseline_per_m": round(base_pm, 3), "optimized_per_m": round(opt_pm, 3),
         "savings_pct": round(savings_pct, 1), "total_tokens": total_tokens,
+        "cache_is_worth_it": cache_worth, "cache_break_even_reads": round(break_even, 3),
     }
 
 
